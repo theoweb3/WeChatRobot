@@ -1,0 +1,68 @@
+name: Build and Release WeChatRobot
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release Tag'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2019
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Solution
+        shell: pwsh
+        run: |
+          Write-Host "Building WeChatRobot with MSBuild (Win32 Release)..."
+          $buildOk = $false
+          try {
+            msbuild WeChatRobot.sln /p:Configuration=Release /p:Platform=Win32
+            if ($LASTEXITCODE -eq 0) { $buildOk = $true }
+          } catch {
+            Write-Host "First build attempt caught error."
+          }
+          if (-not $buildOk) {
+            Write-Host "Retrying build with v142 toolset..."
+            msbuild WeChatRobot.sln /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v142 /p:WindowsTargetPlatformVersion=10.0
+          }
+
+      - name: Verify binaries
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "Release\WeChatRobot.exe") -or -not (Test-Path "Release\WeChatHelper.dll")) {
+            throw "Binaries WeChatRobot.exe or WeChatHelper.dll not found in Release/"
+          }
+          Get-Item Release\WeChatRobot.exe, Release\WeChatHelper.dll | Select-Object Name, Length, LastWriteTime
+
+      - name: Create Zip Archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path Release\WeChatRobot.exe, Release\WeChatHelper.dll, "WeChat 3.2.1.154安装包下载.txt", README.md -DestinationPath WeChatRobot-Release.zip -Force
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: "WeChatRobot Release ${{ inputs.tag || github.ref_name }}"
+          draft: false
+          prerelease: false
+          files: |
+            WeChatRobot-Release.zip
+            Release/WeChatRobot.exe
+            Release/WeChatHelper.dll
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
